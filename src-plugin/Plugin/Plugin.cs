@@ -17,20 +17,26 @@ using SwiftlyS2.Shared.SchemaDefinitions;
 
 namespace K4Arenas;
 
-[PluginMetadata(Id = "k4.arenas", Version = "1.1.1", Name = "K4 - Arenas", Author = "K4ryuu", Description = "Ladder type arena gamemode for Counter-Strike: 2 using SwiftlyS2 framework.")]
+[PluginMetadata(Id = "k4.arenas", Version = "1.1.2", Name = "K4 - Arenas", Author = "K4ryuu", Description = "Ladder type arena gamemode for Counter-Strike: 2 using SwiftlyS2 framework.")]
 public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 {
+	private const string ConfigFileName = "config.json";
+	private const string ConfigSection = "K4Arenas";
+
 	/// <summary>
 	/// Static accessor for Core - available to all nested classes
 	/// </summary>
 	public static new ISwiftlyCore Core { get; private set; } = null!;
 
-	private PluginConfig _config = null!;
+	/// <summary>
+	/// Static accessor for Config - available to all nested classes
+	/// </summary>
+	public static IOptionsMonitor<PluginConfig> Config { get; private set; } = null!;
+
 	private PlayerManager _playerManager = null!;
 	private ArenaManager _arenaManager = null!;
 	private DatabaseService _databaseService = null!;
 
-	private CCSGameRules? _gameRules;
 	private CancellationTokenSource? _warmupTimerCts;
 	private CancellationTokenSource? _clantagTimerCts;
 	private Guid? _jointeamHookGuid;
@@ -48,7 +54,7 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 		RegisterEvents();
 		RegisterCommands();
 
-		if (_config.UsePredefinedConfig)
+		if (Config.CurrentValue.UsePredefinedConfig)
 		{
 			ApplyGameConfig();
 		}
@@ -87,29 +93,27 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 
 	private void LoadConfiguration()
 	{
-		const string ConfigFileName = "config.json";
-		const string ConfigSection = "K4Arenas";
-
 		Core.Configuration
 			.InitializeJsonWithModel<PluginConfig>(ConfigFileName, ConfigSection)
-			.Configure(cfg => cfg.AddJsonFile(Core.Configuration.GetConfigPath(ConfigFileName), optional: false, reloadOnChange: true));
+			.Configure(builder =>
+			{
+				builder.AddJsonFile(ConfigFileName, optional: false, reloadOnChange: true);
+			});
 
-		// Setup DI with validation on startup
 		ServiceCollection services = new();
 		services.AddSwiftly(Core)
-			.AddOptionsWithValidateOnStart<PluginConfig>()
-			.BindConfiguration(ConfigSection);
+			.AddOptions<PluginConfig>()
+			.BindConfiguration(ConfigFileName);
 
-		// Build and validate
 		var provider = services.BuildServiceProvider();
-		_config = provider.GetRequiredService<IOptions<PluginConfig>>().Value;
+		Config = provider.GetRequiredService<IOptionsMonitor<PluginConfig>>();
 	}
 
 	private void InitializeServices()
 	{
 		_playerManager = new PlayerManager();
 		_arenaManager = new ArenaManager(_playerManager);
-		_databaseService = new DatabaseService(_config.DatabaseConnection, _config.DatabasePurgeDays);
+		_databaseService = new DatabaseService(Config.CurrentValue.DatabaseConnection, Config.CurrentValue.DatabasePurgeDays);
 
 		Task.Run(async () =>
 		{
@@ -140,12 +144,12 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 		Core.GameEvent.HookPre<EventRoundMvp>(OnRoundMvp);
 
 		// Optional: Block damage/flash from non-opponents
-		if (_config.Compatibility.BlockDamageOfNotOpponent)
+		if (Config.CurrentValue.Compatibility.BlockDamageOfNotOpponent)
 		{
 			Core.GameEvent.HookPre<EventPlayerHurt>(OnPlayerHurt);
 		}
 
-		if (_config.Compatibility.BlockFlashOfNotOpponent)
+		if (Config.CurrentValue.Compatibility.BlockFlashOfNotOpponent)
 		{
 			Core.GameEvent.HookPost<EventPlayerBlind>(OnPlayerBlind);
 		}
@@ -156,10 +160,10 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 
 	private void RegisterCommands()
 	{
-		RegisterCommandWithAliases(_config.Commands.GunsCommands, OnGunsCommand);
-		RegisterCommandWithAliases(_config.Commands.RoundsCommands, OnRoundsCommand);
-		RegisterCommandWithAliases(_config.Commands.QueueCommands, OnQueueCommand);
-		RegisterCommandWithAliases(_config.Commands.AfkCommands, OnAfkCommand);
+		RegisterCommandWithAliases(Config.CurrentValue.Commands.GunsCommands, OnGunsCommand);
+		RegisterCommandWithAliases(Config.CurrentValue.Commands.RoundsCommands, OnRoundsCommand);
+		RegisterCommandWithAliases(Config.CurrentValue.Commands.QueueCommands, OnQueueCommand);
+		RegisterCommandWithAliases(Config.CurrentValue.Commands.AfkCommands, OnAfkCommand);
 	}
 
 	private static void RegisterCommandWithAliases(List<string> commands, ICommandService.CommandListener handler)
@@ -216,9 +220,8 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 			Weapons.InitializeCache();
 
 			_arenaManager.Initialize();
-			_gameRules = GetGameRules();
 
-			if (_config.UsePredefinedConfig)
+			if (Config.CurrentValue.UsePredefinedConfig)
 			{
 				ApplyGameConfig();
 			}
@@ -238,11 +241,11 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 			// Setup warmup timer
 			Core.Scheduler.DelayBySeconds(3f, () =>
 			{
-				if (_gameRules?.WarmupPeriod == true)
+				if (Core.EntitySystem.GetGameRules()?.WarmupPeriod == true)
 				{
 					_warmupTimerCts = Core.Scheduler.RepeatBySeconds(2f, () =>
 					{
-						if (_gameRules?.WarmupPeriod == true)
+						if (Core.EntitySystem.GetGameRules()?.WarmupPeriod == true)
 						{
 							_arenaManager.PopulateWarmupMatches();
 						}
@@ -256,7 +259,7 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 			});
 
 			// Setup clantag refresh timer if enabled
-			if (!_config.Compatibility.DisableClantags)
+			if (!Config.CurrentValue.Compatibility.DisableClantags)
 			{
 				_clantagTimerCts = Core.Scheduler.RepeatBySeconds(3f, RefreshAllClantags);
 			}
@@ -283,7 +286,7 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 
 		SetupPlayer(player);
 
-		if (_gameRules?.WarmupPeriod == false && !player.IsFakeClient)
+		if (Core.EntitySystem.GetGameRules()?.WarmupPeriod == false && !player.IsFakeClient)
 		{
 			TerminateRoundIfPossible();
 		}
@@ -308,7 +311,7 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 
 	private HookResult OnRoundPrestart(EventRoundPrestart ev)
 	{
-		if (_gameRules?.WarmupPeriod == true)
+		if (Core.EntitySystem.GetGameRules()?.WarmupPeriod == true)
 			return HookResult.Continue;
 
 		_arenaManager.ProcessRoundEnd();
@@ -320,14 +323,14 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 		_arenaManager.IsBetweenRounds = false;
 
 		// Remind AFK players
-		if (_gameRules?.WarmupPeriod == false)
+		if (Core.EntitySystem.GetGameRules()?.WarmupPeriod == false)
 		{
 			foreach (var arenaPlayer in _playerManager.GetAfkPlayers())
 			{
 				if (!arenaPlayer.Player.IsFakeClient)
 				{
 					var localizer = Core.Translation.GetPlayerLocalizer(arenaPlayer.Player);
-					arenaPlayer.Player.SendChat($"{localizer["k4.general.prefix"]} {localizer["k4.chat.afk_reminder", _config.Commands.AfkCommands.FirstOrDefault() ?? "afk"]}");
+					arenaPlayer.Player.SendChat($"{localizer["k4.general.prefix"]} {localizer["k4.chat.afk_reminder", Config.CurrentValue.Commands.AfkCommands.FirstOrDefault() ?? "afk"]}");
 				}
 			}
 
@@ -445,7 +448,7 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 			if (oldTeam > Team.Spectator && newTeam == Team.Spectator && !arenaPlayer.IsAfk)
 			{
 				arenaPlayer.SetAfk();
-				player.SendChat($"{localizer["k4.general.prefix"]} {localizer["k4.chat.afk_enabled", _config.Commands.AfkCommands.FirstOrDefault() ?? "afk"]}");
+				player.SendChat($"{localizer["k4.general.prefix"]} {localizer["k4.chat.afk_enabled", Config.CurrentValue.Commands.AfkCommands.FirstOrDefault() ?? "afk"]}");
 			}
 			else if (oldTeam == Team.Spectator && newTeam > Team.Spectator && arenaPlayer.IsAfk)
 			{
@@ -471,7 +474,7 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 
 	private HookResult OnPlayerHurt(EventPlayerHurt ev)
 	{
-		if (!_config.Compatibility.BlockDamageOfNotOpponent)
+		if (!Config.CurrentValue.Compatibility.BlockDamageOfNotOpponent)
 			return HookResult.Continue;
 
 		var attacker = ev.Accessor.GetPlayer("attacker");
@@ -499,7 +502,7 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 
 	private HookResult OnPlayerBlind(EventPlayerBlind ev)
 	{
-		if (!_config.Compatibility.BlockFlashOfNotOpponent)
+		if (!Config.CurrentValue.Compatibility.BlockFlashOfNotOpponent)
 			return HookResult.Continue;
 
 		var attacker = ev.Accessor.GetPlayer("attacker");
@@ -656,7 +659,7 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 				break;
 
 			case PlayerState.Afk:
-				player.SendChat($"{localizer["k4.general.prefix"]} {localizer["k4.chat.queue_afk", _config.Commands.AfkCommands.FirstOrDefault() ?? "afk"]}");
+				player.SendChat($"{localizer["k4.general.prefix"]} {localizer["k4.chat.queue_afk", Config.CurrentValue.Commands.AfkCommands.FirstOrDefault() ?? "afk"]}");
 				break;
 
 			default:
@@ -685,7 +688,7 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 		{
 			arenaPlayer.SetAfk();
 			player.ChangeTeam(Team.Spectator);
-			player.SendChat($"{localizer["k4.general.prefix"]} {localizer["k4.chat.afk_enabled", _config.Commands.AfkCommands.FirstOrDefault() ?? "afk"]}");
+			player.SendChat($"{localizer["k4.general.prefix"]} {localizer["k4.chat.afk_enabled", Config.CurrentValue.Commands.AfkCommands.FirstOrDefault() ?? "afk"]}");
 		}
 	}
 
@@ -852,7 +855,7 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 		_playerManager.EnqueueWaiting(arenaPlayer);
 
 		// Set initial clantag
-		if (!_config.Compatibility.DisableClantags)
+		if (!Config.CurrentValue.Compatibility.DisableClantags)
 		{
 			UpdatePlayerClantag(arenaPlayer);
 		}
@@ -862,11 +865,11 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 			var position = _playerManager.GetQueuePosition(arenaPlayer);
 			var localizer = Core.Translation.GetPlayerLocalizer(player);
 			player.SendChat($"{localizer["k4.general.prefix"]} {localizer["k4.chat.queue_added", position]}");
-			player.SendChat($"{localizer["k4.general.prefix"]} {localizer["k4.chat.arena_afk", _config.Commands.AfkCommands.FirstOrDefault() ?? "afk"]}");
+			player.SendChat($"{localizer["k4.general.prefix"]} {localizer["k4.chat.arena_afk", Config.CurrentValue.Commands.AfkCommands.FirstOrDefault() ?? "afk"]}");
 
 			if (_databaseService.IsEnabled)
 			{
-				player.SendChat($"{localizer["k4.general.prefix"]} {localizer["k4.chat.arena_commands", _config.Commands.GunsCommands.FirstOrDefault() ?? "guns", _config.Commands.RoundsCommands.FirstOrDefault() ?? "rounds"]}");
+				player.SendChat($"{localizer["k4.general.prefix"]} {localizer["k4.chat.arena_commands", Config.CurrentValue.Commands.GunsCommands.FirstOrDefault() ?? "guns", Config.CurrentValue.Commands.RoundsCommands.FirstOrDefault() ?? "rounds"]}");
 
 				Task.Run(async () =>
 				{
@@ -878,7 +881,7 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 
 	private void UpdatePlayerClantag(ArenaPlayer arenaPlayer)
 	{
-		if (!arenaPlayer.IsValid || _config.Compatibility.DisableClantags)
+		if (!arenaPlayer.IsValid || Config.CurrentValue.Compatibility.DisableClantags)
 			return;
 
 		var controller = arenaPlayer.Player.Controller;
@@ -891,7 +894,7 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 
 	private void RefreshAllClantags()
 	{
-		if (_config.Compatibility.DisableClantags)
+		if (Config.CurrentValue.Compatibility.DisableClantags)
 			return;
 
 		foreach (var arenaPlayer in _playerManager.GetValidPlayers())
@@ -937,10 +940,11 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 
 	private void TerminateRoundIfPossible()
 	{
-		if (_arenaManager.IsBetweenRounds || _gameRules == null)
+		var gameRules = Core.EntitySystem.GetGameRules();
+		if (_arenaManager.IsBetweenRounds || gameRules == null)
 			return;
 
-		if (_gameRules.WarmupPeriod == true)
+		if (gameRules.WarmupPeriod == true)
 			return;
 
 		// Check if any real players exist
@@ -981,20 +985,14 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 				}
 				else
 				{
-					reason = _config.Compatibility.PreventDrawRounds
+					reason = Config.CurrentValue.Compatibility.PreventDrawRounds
 						? (Random.Shared.Next(2) == 0 ? RoundEndReason.CTsWin : RoundEndReason.TerroristsWin)
 						: RoundEndReason.RoundDraw;
 				}
 
-				_gameRules?.TerminateRound(reason, delay);
+				Core.EntitySystem.GetGameRules()?.TerminateRound(reason, delay);
 			});
 		}
-	}
-
-	private CCSGameRules? GetGameRules()
-	{
-		var proxy = Core.EntitySystem.GetAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
-		return proxy?.GameRules;
 	}
 
 	#endregion

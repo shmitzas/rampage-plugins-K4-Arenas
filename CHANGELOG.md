@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.2]
+
+### Changed
+
+- **Config handling refactor**: Migrated to `IOptionsMonitor<PluginConfig>` pattern for hot-reload support and improved config management
+  - Config is now accessible via static `Config.CurrentValue` property
+  - Uses `IOptionsMonitor` instead of `IOptions` for runtime configuration updates
+- **GameRules handling refactor**: Replaced manual GameRules caching with direct `Core.EntitySystem.GetGameRules()` calls
+  - Removed `_gameRules` field and `GetGameRules()` helper method
+  - GameRules now fetched fresh from entity system when needed
+- Aligned config initialization pattern with K4-WeaponPurchase plugin for consistency
+
+### Technical
+
+- Configuration now uses `builder.AddJsonFile(ConfigFileName, optional: false, reloadOnChange: true)` pattern
+- Services use `AddOptions<PluginConfig>()` with `IOptionsMonitor` for live configuration updates
+
 ## [v1.1.1]
 
 ### Fixed

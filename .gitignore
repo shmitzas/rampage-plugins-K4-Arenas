@@ -7,6 +7,7 @@
 # Others
 *.exe
 *.dat
+**/K4-ArenaSharedApi.dll
 
 ### VisualStudioCode ###
 .vscode/
