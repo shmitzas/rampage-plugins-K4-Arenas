@@ -17,7 +17,7 @@ using SwiftlyS2.Shared.SchemaDefinitions;
 
 namespace K4Arenas;
 
-[PluginMetadata(Id = "k4.arenas", Version = "1.1.3", Name = "K4 - Arenas", Author = "K4ryuu", Description = "Ladder type arena gamemode for Counter-Strike: 2 using SwiftlyS2 framework.")]
+[PluginMetadata(Id = "k4.arenas", Version = "1.1.4", Name = "K4 - Arenas", Author = "K4ryuu", Description = "Ladder type arena gamemode for Counter-Strike: 2 using SwiftlyS2 framework.")]
 public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 {
 	private const string ConfigFileName = "config.json";
@@ -938,6 +938,22 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 		}
 	}
 
+	private bool ShouldTerminateForWaitingPlayers()
+	{
+		var waitingRealPlayers = _playerManager.GetWaitingPlayers().Count(p => !p.Player.IsFakeClient);
+		if (waitingRealPlayers == 0)
+			return false;
+
+		var realPlayersInArenas = 0;
+		foreach (var arena in _arenaManager.Arenas.Where(a => a.IsActive))
+		{
+			realPlayersInArenas += arena.Team1Players.Count(p => p.IsValid && !p.Player.IsFakeClient);
+			realPlayersInArenas += arena.Team2Players.Count(p => p.IsValid && !p.Player.IsFakeClient);
+		}
+
+		return realPlayersInArenas <= 1;
+	}
+
 	private void TerminateRoundIfPossible()
 	{
 		var gameRules = Core.EntitySystem.GetGameRules();
@@ -954,7 +970,7 @@ public sealed partial class Plugin(ISwiftlyCore core) : BasePlugin(core)
 		if (!hasRealPlayers)
 			return;
 
-		if (_arenaManager.AllArenasFinished())
+		if (_arenaManager.AllArenasFinished() || ShouldTerminateForWaitingPlayers())
 		{
 			_arenaManager.IsBetweenRounds = true;
 
